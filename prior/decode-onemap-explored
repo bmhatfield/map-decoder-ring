@@ -1,0 +1,414 @@
+#!/usr/bin/env python3
+import argparse
+import json
+import struct
+from pathlib import Path
+
+
+MAP_SIZE = 2048
+MAP_CELLS = MAP_SIZE * MAP_SIZE
+PACKED_BYTES = MAP_CELLS // 8
+
+
+ABBR_TO_NAME = {
+    "Rb": "Raspberry",
+    "Bb": "Blueberry",
+    "Mu": "Mushroom",
+    "Th": "Thistle",
+    "Cb": "Cloudberry",
+    "Br": "Barley",
+    "Fl": "Flax",
+    "On": "Onion",
+    "Ca": "Carrot",
+    "Tu": "Turnip",
+    "Ch": "Chitin",
+    "Cr": "Crystal",
+    "Su": "SurtlingCore",
+    "Bc": "BlackCore",
+    "JP": "JotunPuff",
+    "Mc": "Magecap",
+    "Dan": "Dandelion",
+    "Fli": "Flint",
+    "BI": "BogIron",
+    "DEgg": "DragonEgg",
+    "Tar": "Tar",
+    "Fern": "Fiddlehead",
+    "RJly": "RoyalJelly",
+    "Sulf": "Sulfur",
+    "VEgg": "VoltureEgg",
+    "Ash": "Ashstone",
+    "MCor": "MoltenCore",
+    "CSku": "Charredskull",
+    "Cu": "Copper",
+    "Sn": "Tin",
+    "Ag": "Silver",
+    "Fe": "Iron",
+    "Ob": "Obsidian",
+    "Fm": "Flametal",
+    "Met": "Meteorite",
+    "BkM": "BlackMarble",
+    "Stn": "Stone",
+    "SCrypt": "SunkenCrypt",
+    "Crypt": "Crypt",
+    "MCave": "MountainCave",
+    "TCave": "TrollCave",
+    "Mud": "MudPile",
+    "Shop": "Vendor",
+    "DNest": "DrakeNest",
+    "Henge": "Henge",
+    "Eik": "Eikthyr",
+    "Elder": "GDKing",
+    "Bone": "Bonemass",
+    "Moder": "DragonQueen",
+    "Yag": "GoblinKing",
+    "Queen": "SeekerQueen",
+    "Fader": "Fader",
+    "FCave": "FrostCave",
+    "IMine": "InfestedMine",
+    "Hild": "Hildir",
+    "Witch": "BogWitch",
+    "GCamp": "GoblinCamp",
+    "WFarm": "WoodFarm",
+    "Dtown": "DvergrTown",
+    "Ship": "ShipWreck",
+    "Rune": "Runestone",
+    "GSku": "GiantSkull",
+    "BHive": "Beehive",
+    "Grl": "Greyling",
+    "Boar": "Boar",
+    "Deer": "Deer",
+    "Neck": "Neck",
+    "Hen": "Chicken",
+    "Hare": "Hare",
+    "GdwE": "GreydwarfElite",
+    "GdwS": "GreydwarfShaman",
+    "Gdw": "Greydwarf",
+    "Trl": "Troll",
+    "Skel": "Skeleton",
+    "DrE": "DraugrElite",
+    "Dr": "Draugr",
+    "Lch": "Leech",
+    "Blob": "Blob",
+    "Wra": "Wraith",
+    "Srt": "Surtling",
+    "Abom": "Abomination",
+    "Gst": "Ghost",
+    "Wolf": "Wolf",
+    "Drk": "Drake",
+    "Glm": "Stone Golem",
+    "Fen": "Fenring",
+    "Cult": "Cultist",
+    "Bat": "Bat",
+    "FulB": "FulingBerserker",
+    "FulS": "FulingShaman",
+    "FulA": "FulingArcher",
+    "Ful": "Fuling",
+    "Dsq": "Deathsquito",
+    "Lox": "Lox",
+    "SkrB": "SeekerBrood",
+    "Skr": "Seeker",
+    "Gjl": "Gjall",
+    "Tick": "Tick",
+    "DvrM": "DvergrMage",
+    "Dvr": "Dvergr",
+    "Ulv": "Ulv",
+    "Chr": "Charred",
+    "Mrg": "Morgen",
+    "Ask": "Asksvin",
+    "Vlt": "Volture",
+    "Ubj": "Unbjorn",
+    "Kvas": "Kvastur",
+    "Spt": "Serpent",
+    "Lev": "Leviathan",
+    "Fish": "Fish",
+}
+
+
+class Reader:
+    def __init__(self, data: bytes, offset: int = 0):
+        self.data = data
+        self.pos = offset
+
+    def remaining(self) -> int:
+        return len(self.data) - self.pos
+
+    def read_u8(self) -> int:
+        self._need(1)
+        v = self.data[self.pos]
+        self.pos += 1
+        return v
+
+    def read_bool(self) -> bool:
+        return self.read_u8() != 0
+
+    def read_i32(self) -> int:
+        self._need(4)
+        v = struct.unpack_from("<i", self.data, self.pos)[0]
+        self.pos += 4
+        return v
+
+    def read_f32(self) -> float:
+        self._need(4)
+        v = struct.unpack_from("<f", self.data, self.pos)[0]
+        self.pos += 4
+        return v
+
+    def read_vector3(self) -> dict:
+        return {
+            "x": self.read_f32(),
+            "y": self.read_f32(),
+            "z": self.read_f32(),
+        }
+
+    def read_7bit_encoded_int(self) -> int:
+        """
+        C# BinaryReader.Read7BitEncodedInt format, used by BinaryWriter.Write(string).
+        """
+        value = 0
+        shift = 0
+
+        for _ in range(5):
+            b = self.read_u8()
+            value |= (b & 0x7F) << shift
+
+            if (b & 0x80) == 0:
+                return value
+
+            shift += 7
+
+        raise ValueError(f"invalid 7-bit encoded int at offset {self.pos}")
+
+    def read_string(self) -> str:
+        # Valheim/ZPackage strings use C# BinaryWriter.Write(string):
+        # 7-bit encoded byte length + UTF-8 bytes.
+        n = self.read_7bit_encoded_int()
+
+        if n > self.remaining():
+            raise ValueError(
+                f"invalid string length {n} at offset {self.pos}; "
+                f"only {self.remaining()} bytes remain"
+            )
+
+        raw = self.data[self.pos:self.pos + n]
+        self.pos += n
+        return raw.decode("utf-8", errors="replace")
+
+    def _need(self, n: int):
+        if self.pos + n > len(self.data):
+            raise EOFError(
+                f"wanted {n} bytes at offset {self.pos}, "
+                f"only {self.remaining()} bytes remain"
+            )
+
+
+def find_header(data: bytes) -> int:
+    """
+    Find plausible OneMapToRuleThemAll explored payload start:
+      int32 version in {1,2}
+      int32 map_size == 2048
+
+    This handles files with leading zero padding before the actual payload.
+    """
+    search_limit = min(len(data) - 8, 2_000_000)
+
+    for off in range(0, search_limit):
+        version = struct.unpack_from("<i", data, off)[0]
+        size = struct.unpack_from("<i", data, off + 4)[0]
+
+        if version in (1, 2) and size == MAP_SIZE:
+            return off
+
+    raise ValueError(
+        "could not find plausible header: "
+        "int32 version {1,2}, int32 size 2048"
+    )
+
+
+def unpack_v2_bits(blob: bytes) -> list[bool]:
+    """
+    Version 2 stores the 2048x2048 explored map as packed bits.
+
+    2048 * 2048 / 8 = 524288 bytes.
+    """
+    if len(blob) < PACKED_BYTES:
+        raise EOFError(f"need {PACKED_BYTES} packed map bytes, got {len(blob)}")
+
+    explored = [False] * MAP_CELLS
+    idx = 0
+
+    for b in blob[:PACKED_BYTES]:
+        for bit in range(8):
+            explored[idx] = (b & (1 << bit)) != 0
+            idx += 1
+
+    return explored
+
+
+def decode_pin_name(name: str | None) -> dict:
+    """
+    Auto-discovery pin names can look like:
+      Tu
+      Tu 4
+      Cu 12
+
+    Return both compact abbreviation and expanded prefab-ish object name.
+    """
+    if not name:
+        return {
+            "abbr": name,
+            "decoded": None,
+            "count": None,
+        }
+
+    parts = name.split()
+    abbr = parts[0]
+    decoded = ABBR_TO_NAME.get(abbr)
+
+    count = None
+    if len(parts) >= 2:
+        try:
+            count = int(parts[1])
+        except ValueError:
+            pass
+
+    return {
+        "abbr": abbr,
+        "decoded": decoded,
+        "count": count,
+    }
+
+
+def read_explored_file(path: Path) -> dict:
+    data = path.read_bytes()
+    start = find_header(data)
+    r = Reader(data, start)
+
+    version = r.read_i32()
+    map_size = r.read_i32()
+
+    if map_size != MAP_SIZE:
+        raise ValueError(f"unexpected map size {map_size}; expected {MAP_SIZE}")
+
+    if version >= 2:
+        packed_start = r.pos
+        packed = data[packed_start:packed_start + PACKED_BYTES]
+        explored = unpack_v2_bits(packed)
+        r.pos += PACKED_BYTES
+    elif version == 1:
+        # Version 1 used one bool byte per cell.
+        explored = [r.read_bool() for _ in range(MAP_CELLS)]
+    else:
+        raise ValueError(f"unsupported version {version}")
+
+    explored_count = sum(explored)
+
+    pins = []
+    pin_count = r.read_i32()
+
+    for _ in range(pin_count):
+        name = r.read_string()
+        decoded_name = decode_pin_name(name)
+
+        pins.append({
+            "name": name,
+            "decoded_name": decoded_name["decoded"],
+            "decoded_abbr": decoded_name["abbr"],
+            "decoded_count": decoded_name["count"],
+            "pos": r.read_vector3(),
+            "type": r.read_i32(),
+            "checked": r.read_bool(),
+            "owner_id": r.read_string(),
+        })
+
+    return {
+        "file": str(path),
+        "file_size": len(data),
+        "header_offset": start,
+        "leading_padding_bytes": start,
+        "version": version,
+        "map_size": map_size,
+        "cells": MAP_CELLS,
+        "packed_map_bytes": PACKED_BYTES if version >= 2 else None,
+        "explored_count": explored_count,
+        "unexplored_count": MAP_CELLS - explored_count,
+        "explored_percent": explored_count * 100.0 / MAP_CELLS,
+        "pin_count": pin_count,
+        "pins": pins,
+        "bytes_consumed": r.pos,
+        "trailing_bytes": len(data) - r.pos,
+        "_explored": explored,
+    }
+
+
+def write_pgm(path: Path, explored: list[bool]):
+    """
+    Writes a simple portable grayscale image:
+      explored = white
+      unexplored = black
+
+    View with many image tools, or convert with ImageMagick:
+      magick explored.pgm explored.png
+    """
+    with path.open("wb") as f:
+        f.write(f"P5\n{MAP_SIZE} {MAP_SIZE}\n255\n".encode("ascii"))
+        f.write(bytes(255 if v else 0 for v in explored))
+
+
+def summarize_by_decoded_name(pins: list[dict]) -> dict:
+    summary = {}
+
+    for pin in pins:
+        key = pin.get("decoded_name") or pin.get("name") or "<unknown>"
+
+        if key not in summary:
+            summary[key] = {
+                "pin_count": 0,
+                "decoded_count_sum": 0,
+                "checked": 0,
+                "unchecked": 0,
+            }
+
+        summary[key]["pin_count"] += 1
+        summary[key]["decoded_count_sum"] += pin.get("decoded_count") or 0
+
+        if pin.get("checked"):
+            summary[key]["checked"] += 1
+        else:
+            summary[key]["unchecked"] += 1
+
+    return dict(sorted(summary.items(), key=lambda kv: kv[0]))
+
+
+def main():
+    ap = argparse.ArgumentParser(
+        description="Decode a OneMapToRuleThemAll .explored file"
+    )
+    ap.add_argument("file", type=Path)
+    ap.add_argument("--json", type=Path, help="write decoded metadata/pins JSON")
+    ap.add_argument("--pgm", type=Path, help="write explored map as grayscale PGM image")
+    ap.add_argument("--pins", action="store_true", help="print full pin list to stdout")
+    ap.add_argument("--summary", action="store_true", help="include pin summary by decoded name")
+    args = ap.parse_args()
+
+    decoded = read_explored_file(args.file)
+    explored = decoded.pop("_explored")
+
+    if args.pgm:
+        write_pgm(args.pgm, explored)
+
+    if args.summary:
+        decoded["pin_summary_by_name"] = summarize_by_decoded_name(decoded["pins"])
+
+    if args.json:
+        args.json.write_text(json.dumps(decoded, indent=2), encoding="utf-8")
+
+    out = dict(decoded)
+
+    if not args.pins:
+        out["pins"] = f"{decoded['pin_count']} pins hidden; pass --pins to print them"
+
+    print(json.dumps(out, indent=2))
+
+
+if __name__ == "__main__":
+    main()
