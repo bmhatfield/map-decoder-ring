@@ -202,7 +202,6 @@ type DecodedFile struct {
 	BytesConsumed         int          `json:"bytes_consumed"`
 	TrailingBytes         int          `json:"trailing_bytes"`
 	PinSummary            []PinSummary `json:"pin_summary,omitempty"`
-	explored              []bool
 	fullPins              []Pin
 }
 
@@ -249,24 +248,19 @@ func looksLikePayloadAt(data []byte, off int) bool {
 	return int(pinCount) <= remaining/minPinBytes
 }
 
-func unpackV2Bits(blob []byte) ([]bool, int, error) {
+func countV2Bits(blob []byte) (int, error) {
 	if len(blob) < packedBytes {
-		return nil, 0, fmt.Errorf("need %d packed map bytes, got %d", packedBytes, len(blob))
+		return 0, fmt.Errorf("need %d packed map bytes, got %d", packedBytes, len(blob))
 	}
-	explored := make([]bool, mapCells)
 	count := 0
-	idx := 0
 	for _, b := range blob[:packedBytes] {
 		for bit := 0; bit < 8; bit++ {
-			v := b&(1<<bit) != 0
-			explored[idx] = v
-			if v {
+			if b&(1<<bit) != 0 {
 				count++
 			}
-			idx++
 		}
 	}
-	return explored, count, nil
+	return count, nil
 }
 
 func decodePinName(name string) DecodedName {
@@ -308,7 +302,6 @@ func readExploredFile(path string) (*DecodedFile, error) {
 		return nil, fmt.Errorf("unexpected map size %d; expected %d", size, mapSize)
 	}
 
-	var explored []bool
 	var exploredCount int
 	fixedMapBytes := mapCells
 	var packed *int
@@ -318,19 +311,17 @@ func readExploredFile(path string) (*DecodedFile, error) {
 		p := packedBytes
 		packed = &p
 		fixedMapBytes = packedBytes
-		explored, exploredCount, err = unpackV2Bits(data[packedStart:])
+		exploredCount, err = countV2Bits(data[packedStart:])
 		if err != nil {
 			return nil, err
 		}
 		r.pos += packedBytes
 	case 1:
-		explored = make([]bool, mapCells)
-		for i := range explored {
+		for i := 0; i < mapCells; i++ {
 			v, err := r.readBool()
 			if err != nil {
 				return nil, err
 			}
-			explored[i] = v
 			if v {
 				exploredCount++
 			}
@@ -389,21 +380,8 @@ func readExploredFile(path string) (*DecodedFile, error) {
 		ExploredCount: exploredCount, UnexploredCount: mapCells - exploredCount,
 		ExploredPercent: float64(exploredCount) * 100 / mapCells,
 		PinCount:        pinCount, Pins: pins, BytesConsumed: r.pos, TrailingBytes: len(data) - r.pos,
-		explored: explored, fullPins: pins,
+		fullPins: pins,
 	}, nil
-}
-
-func writePGM(path string, explored []bool) error {
-	var buf bytes.Buffer
-	fmt.Fprintf(&buf, "P5\n%d %d\n255\n", mapSize, mapSize)
-	for _, v := range explored {
-		if v {
-			buf.WriteByte(255)
-		} else {
-			buf.WriteByte(0)
-		}
-	}
-	return os.WriteFile(path, buf.Bytes(), 0644)
 }
 
 func summarizePins(pins []Pin) []PinSummary {
@@ -454,15 +432,14 @@ func summaryKey(pin Pin) (key, displayName, source string) {
 }
 
 func main() {
-	var jsonPath, pgmPath string
+	var jsonPath string
 	var showPins, showSummary bool
 	flag.StringVar(&jsonPath, "json", "", "write decoded metadata/pins JSON")
-	flag.StringVar(&pgmPath, "pgm", "", "write explored map as grayscale PGM image")
 	flag.BoolVar(&showPins, "pins", false, "print full pin list to stdout")
 	flag.BoolVar(&showSummary, "summary", false, "include pin summary grouped by source and display name")
 	flag.Parse()
 	if flag.NArg() != 1 {
-		fmt.Fprintf(os.Stderr, "usage: %s [--json path] [--pgm path] [--pins] [--summary] file\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "usage: %s [--json path] [--pins] [--summary] file\n", os.Args[0])
 		os.Exit(2)
 	}
 
@@ -470,12 +447,6 @@ func main() {
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
-	}
-	if pgmPath != "" {
-		if err := writePGM(pgmPath, decoded.explored); err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
-		}
 	}
 	if showSummary {
 		decoded.PinSummary = summarizePins(decoded.fullPins)

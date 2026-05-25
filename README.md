@@ -9,7 +9,6 @@ go run . fixtures/Dedicated.one_map_to_rule_them_all.explored
 go run . --summary fixtures/Dedicated.one_map_to_rule_them_all.explored
 go run . --pins fixtures/Dedicated.one_map_to_rule_them_all.explored
 go run . --json decoded.json fixtures/Dedicated.one_map_to_rule_them_all.explored
-go run . --pgm explored.pgm fixtures/Dedicated.one_map_to_rule_them_all.explored
 ```
 
 ## Test
