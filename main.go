@@ -11,6 +11,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -169,31 +170,35 @@ type Pin struct {
 }
 
 type PinSummary struct {
-	PinCount        int `json:"pin_count"`
-	DecodedCountSum int `json:"decoded_count_sum"`
-	Checked         int `json:"checked"`
-	Unchecked       int `json:"unchecked"`
+	Key                      string `json:"key"`
+	DisplayName              string `json:"display_name"`
+	Source                   string `json:"source"`
+	PinCount                 int    `json:"pin_count"`
+	DiscoveredObjectCountSum int    `json:"discovered_object_count_sum"`
+	CountedPinCount          int    `json:"counted_pin_count"`
+	Checked                  int    `json:"checked"`
+	Unchecked                int    `json:"unchecked"`
 }
 
 type DecodedFile struct {
-	File                  string                `json:"file"`
-	FileSize              int                   `json:"file_size"`
-	HeaderOffset          int                   `json:"header_offset"`
-	LeadingPaddingBytes   int                   `json:"leading_padding_bytes"`
-	Version               int32                 `json:"version"`
-	MapSize               int32                 `json:"map_size"`
-	Cells                 int                   `json:"cells"`
-	PackedMapBytes        *int                  `json:"packed_map_bytes"`
-	FixedMapBytes         int                   `json:"fixed_map_bytes"`
-	EstimatedPayloadBytes int                   `json:"estimated_payload_bytes"`
-	ExploredCount         int                   `json:"explored_count"`
-	UnexploredCount       int                   `json:"unexplored_count"`
-	ExploredPercent       float64               `json:"explored_percent"`
-	PinCount              int32                 `json:"pin_count"`
-	Pins                  any                   `json:"pins"`
-	BytesConsumed         int                   `json:"bytes_consumed"`
-	TrailingBytes         int                   `json:"trailing_bytes"`
-	PinSummaryByName      map[string]PinSummary `json:"pin_summary_by_name,omitempty"`
+	File                  string       `json:"file"`
+	FileSize              int          `json:"file_size"`
+	HeaderOffset          int          `json:"header_offset"`
+	LeadingPaddingBytes   int          `json:"leading_padding_bytes"`
+	Version               int32        `json:"version"`
+	MapSize               int32        `json:"map_size"`
+	Cells                 int          `json:"cells"`
+	PackedMapBytes        *int         `json:"packed_map_bytes"`
+	FixedMapBytes         int          `json:"fixed_map_bytes"`
+	EstimatedPayloadBytes int          `json:"estimated_payload_bytes"`
+	ExploredCount         int          `json:"explored_count"`
+	UnexploredCount       int          `json:"unexplored_count"`
+	ExploredPercent       float64      `json:"explored_percent"`
+	PinCount              int32        `json:"pin_count"`
+	Pins                  any          `json:"pins"`
+	BytesConsumed         int          `json:"bytes_consumed"`
+	TrailingBytes         int          `json:"trailing_bytes"`
+	PinSummary            []PinSummary `json:"pin_summary,omitempty"`
 	explored              []bool
 	fullPins              []Pin
 }
@@ -370,29 +375,51 @@ func writePGM(path string, explored []bool) error {
 	return os.WriteFile(path, buf.Bytes(), 0644)
 }
 
-func summarizeByDecodedName(pins []Pin) map[string]PinSummary {
-	out := make(map[string]PinSummary)
+func summarizePins(pins []Pin) []PinSummary {
+	byKey := make(map[string]PinSummary)
 	for _, pin := range pins {
-		key := pin.DecodedName
-		if key == "" {
-			key = pin.Name
-		}
-		if key == "" {
-			key = "<unknown>"
-		}
-		s := out[key]
+		key, displayName, source := summaryKey(pin)
+		s := byKey[key]
+		s.Key = key
+		s.DisplayName = displayName
+		s.Source = source
 		s.PinCount++
 		if pin.DecodedCnt != nil {
-			s.DecodedCountSum += *pin.DecodedCnt
+			s.DiscoveredObjectCountSum += *pin.DecodedCnt
+			s.CountedPinCount++
 		}
 		if pin.Checked {
 			s.Checked++
 		} else {
 			s.Unchecked++
 		}
-		out[key] = s
+		byKey[key] = s
 	}
+
+	out := make([]PinSummary, 0, len(byKey))
+	for _, summary := range byKey {
+		out = append(out, summary)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Source != out[j].Source {
+			return out[i].Source < out[j].Source
+		}
+		if out[i].DisplayName != out[j].DisplayName {
+			return out[i].DisplayName < out[j].DisplayName
+		}
+		return out[i].Key < out[j].Key
+	})
 	return out
+}
+
+func summaryKey(pin Pin) (key, displayName, source string) {
+	if pin.DecodedName != "" {
+		return "decoded:" + pin.DecodedName, pin.DecodedName, "decoded"
+	}
+	if pin.Name != "" {
+		return "raw:" + pin.Name, pin.Name, "raw"
+	}
+	return "unknown:", "<unknown>", "unknown"
 }
 
 func main() {
@@ -420,7 +447,7 @@ func main() {
 		}
 	}
 	if showSummary {
-		decoded.PinSummaryByName = summarizeByDecodedName(decoded.fullPins)
+		decoded.PinSummary = summarizePins(decoded.fullPins)
 	}
 	if !showPins {
 		decoded.Pins = fmt.Sprintf("%d pins hidden; pass --pins to print them", decoded.PinCount)
@@ -450,9 +477,12 @@ func main() {
 }
 
 func marshalStableJSON(v any) ([]byte, error) {
-	data, err := json.MarshalIndent(v, "", "  ")
-	if err != nil {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(v); err != nil {
 		return nil, err
 	}
-	return data, nil
+	return bytes.TrimRight(buf.Bytes(), "\n"), nil
 }
