@@ -170,14 +170,14 @@ type Pin struct {
 }
 
 type PinSummary struct {
-	Key                      string `json:"key"`
-	DisplayName              string `json:"display_name"`
-	Source                   string `json:"source"`
-	PinCount                 int    `json:"pin_count"`
-	DiscoveredObjectCountSum int    `json:"discovered_object_count_sum"`
-	CountedPinCount          int    `json:"counted_pin_count"`
-	Checked                  int    `json:"checked"`
-	Unchecked                int    `json:"unchecked"`
+	Key                string `json:"-"`
+	DisplayName        string `json:"display_name"`
+	Source             string `json:"source"`
+	PinCount           int    `json:"pin_count"`
+	ImpliedObjectCount int    `json:"implied_object_count"`
+	BatchPins          int    `json:"batch_pins"`
+	Checked            int    `json:"checked"`
+	Unchecked          int    `json:"unchecked"`
 }
 
 type DecodedFile struct {
@@ -385,8 +385,8 @@ func summarizePins(pins []Pin) []PinSummary {
 		s.Source = source
 		s.PinCount++
 		if pin.DecodedCnt != nil {
-			s.DiscoveredObjectCountSum += *pin.DecodedCnt
-			s.CountedPinCount++
+			s.ImpliedObjectCount += *pin.DecodedCnt
+			s.BatchPins++
 		}
 		if pin.Checked {
 			s.Checked++
