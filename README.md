@@ -34,4 +34,27 @@ Largest examples:
 | current | `Tu 178` at `(806.4286, 39.3086, -811.5291)` | 27 |
 | old | `Tu 386` at `(804.3380, 39.9261, -805.8654)` | 3,794 |
 
+Example excerpt from `--pins` showing the same repeated pin twice:
+
+```json
+[
+  {
+    "name": "Tu 178",
+    "decoded_name": "Turnip",
+    "pos": { "x": 806.4286, "y": 39.3086, "z": -811.5291 },
+    "type": 3,
+    "checked": true,
+    "owner_id": "auto"
+  },
+  {
+    "name": "Tu 178",
+    "decoded_name": "Turnip",
+    "pos": { "x": 806.4286, "y": 39.3086, "z": -811.5291 },
+    "type": 3,
+    "checked": true,
+    "owner_id": "auto"
+  }
+]
+```
+
 The decoder reports raw data as stored; it does not deduplicate pins.
