@@ -1,3 +1,3 @@
-module github.com/bmhatfield/onemap-decoder-ring
+module github.com/bmhatfield/map-decoder-ring
 
 go 1.26.3
