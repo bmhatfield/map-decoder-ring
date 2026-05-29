@@ -1,7 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"encoding/binary"
+	"encoding/json"
+	"math"
 	"strings"
 	"testing"
 )
@@ -10,6 +13,7 @@ const (
 	currentFixture = "fixtures/Dedicated.one_map_to_rule_them_all.explored"
 	oldFixture     = "fixtures/Dedicated.one_map_to_rule_them_all.explored.old"
 	serverFixture  = "fixtures/Dedicated.mod.serversidemap.explored"
+	emptyFixture   = "fixtures/Dedicated.mod.serversidemap.explored.empty"
 )
 
 func TestDedicatedExploredFixture(t *testing.T) {
@@ -39,6 +43,142 @@ func TestDedicatedServerSideMapExploredFixture(t *testing.T) {
 			t.Fatalf("ServerSideMap pin owner = %q, want empty", pin.OwnerID)
 		}
 	}
+}
+
+func TestDedicatedEmptyServerSideMapExploredFixture(t *testing.T) {
+	decoded, err := readExploredFile(emptyFixture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertFixture(t, decoded, "serversidemap", "bool_bytes", 3, 4194316, 162, 0, 4)
+	if decoded.UnexploredCount != mapCells-162 {
+		t.Fatalf("unexplored count = %d, want %d", decoded.UnexploredCount, mapCells-162)
+	}
+	if len(decoded.fullPins) != 0 {
+		t.Fatalf("full pin count = %d, want 0", len(decoded.fullPins))
+	}
+	if got := summarizePins(decoded.fullPins); len(got) != 0 {
+		t.Fatalf("summary entry count = %d, want 0", len(got))
+	}
+}
+
+func TestEmptyFixtureBaseOutputOmitsPins(t *testing.T) {
+	out := runJSON(t, emptyFixture)
+	assertEmptyFixtureMetadata(t, out)
+	assertJSONBool(t, out, "pins_omitted", true)
+	assertJSONMissing(t, out, "pins")
+	assertJSONMissing(t, out, "pin_summary")
+}
+
+func TestEmptyFixturePinsOutputHasNoOmittedMarker(t *testing.T) {
+	out := runJSON(t, "--pins", emptyFixture)
+	assertEmptyFixtureMetadata(t, out)
+	assertJSONMissing(t, out, "pins_omitted")
+	assertJSONMissing(t, out, "pins")
+	assertJSONMissing(t, out, "pin_summary")
+}
+
+func TestEmptyFixtureSummaryOutputOmitsEmptySummary(t *testing.T) {
+	out := runJSON(t, "--summary", emptyFixture)
+	assertEmptyFixtureMetadata(t, out)
+	assertJSONBool(t, out, "pins_omitted", true)
+	assertJSONMissing(t, out, "pins")
+	assertJSONMissing(t, out, "pin_summary")
+}
+
+func TestServerSideMapBaseOutputOmitsPins(t *testing.T) {
+	out := runJSON(t, serverFixture)
+	assertServerFixtureMetadata(t, out)
+	assertJSONBool(t, out, "pins_omitted", true)
+	assertJSONMissing(t, out, "pins")
+	assertJSONMissing(t, out, "pin_summary")
+}
+
+func TestServerSideMapPinsOutputIncludesRepresentativePins(t *testing.T) {
+	out := runJSON(t, "--pins", serverFixture)
+	assertServerFixtureMetadata(t, out)
+	assertJSONMissing(t, out, "pins_omitted")
+	assertJSONMissing(t, out, "pin_summary")
+
+	pins := assertJSONArray(t, out, "pins", 11)
+	anything := findJSONObject(t, pins, "name", "ANYTHING")
+	assertJSONMissing(t, anything, "decoded_name")
+	assertJSONMissing(t, anything, "decoded_abbr")
+	assertJSONNull(t, anything, "decoded_count")
+	assertJSONNumber(t, anything, "type", 0)
+	assertJSONBool(t, anything, "checked", false)
+	assertJSONString(t, anything, "owner_id", "")
+	assertJSONVector(t, anything, "pos", 801.8745, 0, -784.032)
+
+	mapDay := findJSONObject(t, pins, "name", "$hud_mapday 496")
+	assertJSONMissing(t, mapDay, "decoded_name")
+	assertJSONMissing(t, mapDay, "decoded_abbr")
+	assertJSONNull(t, mapDay, "decoded_count")
+	assertJSONNumber(t, mapDay, "type", 4)
+	assertJSONBool(t, mapDay, "checked", false)
+	assertJSONString(t, mapDay, "owner_id", "")
+	assertJSONVector(t, mapDay, "pos", 1268.3069, 39.010666, 4389.2583)
+
+	village := findJSONObject(t, pins, "name", "fuling village")
+	assertJSONMissing(t, village, "decoded_name")
+	assertJSONMissing(t, village, "decoded_abbr")
+	assertJSONNull(t, village, "decoded_count")
+	assertJSONNumber(t, village, "type", 0)
+	assertJSONString(t, village, "owner_id", "")
+}
+
+func TestServerSideMapSummaryOutputIncludesRawGroups(t *testing.T) {
+	out := runJSON(t, "--summary", serverFixture)
+	assertServerFixtureMetadata(t, out)
+	assertJSONBool(t, out, "pins_omitted", true)
+	assertJSONMissing(t, out, "pins")
+
+	summary := assertJSONArray(t, out, "pin_summary", 11)
+	assertJSONSummary(t, findJSONObject(t, summary, "display_name", "$enemy_dragon"), "$enemy_dragon", "raw", 1, 0, 0, 0, 1)
+	assertJSONSummary(t, findJSONObject(t, summary, "display_name", "$hud_mapday 496"), "$hud_mapday 496", "raw", 1, 0, 0, 0, 1)
+	assertJSONSummary(t, findJSONObject(t, summary, "display_name", "$hud_mapday 497"), "$hud_mapday 497", "raw", 1, 0, 0, 0, 1)
+	assertJSONSummary(t, findJSONObject(t, summary, "display_name", "fuling village"), "fuling village", "raw", 1, 0, 0, 0, 1)
+}
+
+func TestServerSideMapFixtureSummary(t *testing.T) {
+	decoded, err := readExploredFile(serverFixture)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	summary := summaryByKey(summarizePins(decoded.fullPins))
+	assertSummaryTotal(t, summary, int(decoded.PinCount))
+	if len(summary) != 11 {
+		t.Fatalf("summary entry count = %d, want 11", len(summary))
+	}
+	assertSummaryEntry(t, summary, "raw:$enemy_dragon", PinSummary{
+		Key:         "raw:$enemy_dragon",
+		DisplayName: "$enemy_dragon",
+		Source:      "raw",
+		PinCount:    1,
+		Unchecked:   1,
+	})
+	assertSummaryEntry(t, summary, "raw:$hud_mapday 496", PinSummary{
+		Key:         "raw:$hud_mapday 496",
+		DisplayName: "$hud_mapday 496",
+		Source:      "raw",
+		PinCount:    1,
+		Unchecked:   1,
+	})
+	assertSummaryEntry(t, summary, "raw:$hud_mapday 497", PinSummary{
+		Key:         "raw:$hud_mapday 497",
+		DisplayName: "$hud_mapday 497",
+		Source:      "raw",
+		PinCount:    1,
+		Unchecked:   1,
+	})
+	assertSummaryEntry(t, summary, "raw:fuling village", PinSummary{
+		Key:         "raw:fuling village",
+		DisplayName: "fuling village",
+		Source:      "raw",
+		PinCount:    1,
+		Unchecked:   1,
+	})
 }
 
 func TestSummarizeByDecodedName(t *testing.T) {
@@ -319,4 +459,168 @@ func summaryByKey(entries []PinSummary) map[string]PinSummary {
 		out[entry.Key] = entry
 	}
 	return out
+}
+
+func runJSON(t *testing.T, args ...string) map[string]any {
+	t.Helper()
+	var stdout, stderr bytes.Buffer
+	if code := run(args, &stdout, &stderr); code != 0 {
+		t.Fatalf("run(%v) exit code = %d, stderr = %q", args, code, stderr.String())
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("run(%v) stderr = %q, want empty", args, stderr.String())
+	}
+	var out map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+		t.Fatalf("unmarshal output: %v\n%s", err, stdout.String())
+	}
+	return out
+}
+
+func assertEmptyFixtureMetadata(t *testing.T, out map[string]any) {
+	t.Helper()
+	assertJSONString(t, out, "file", emptyFixture)
+	assertJSONNumber(t, out, "file_size", 4194316)
+	assertJSONNumber(t, out, "header_offset", 0)
+	assertJSONNumber(t, out, "leading_padding_bytes", 0)
+	assertJSONString(t, out, "format", "serversidemap")
+	assertJSONString(t, out, "map_encoding", "bool_bytes")
+	assertJSONNumber(t, out, "version", 3)
+	assertJSONNumber(t, out, "map_size", mapSize)
+	assertJSONNumber(t, out, "cells", mapCells)
+	assertJSONNull(t, out, "packed_map_bytes")
+	assertJSONNumber(t, out, "fixed_map_bytes", mapCells)
+	assertJSONNumber(t, out, "estimated_payload_bytes", 4)
+	assertJSONNumber(t, out, "explored_count", 162)
+	assertJSONNumber(t, out, "unexplored_count", mapCells-162)
+	assertJSONFloat(t, out, "explored_percent", float64(162)*100/mapCells)
+	assertJSONNumber(t, out, "pin_count", 0)
+	assertJSONNumber(t, out, "bytes_consumed", 4194316)
+	assertJSONNumber(t, out, "trailing_bytes", 0)
+}
+
+func assertServerFixtureMetadata(t *testing.T, out map[string]any) {
+	t.Helper()
+	assertJSONString(t, out, "file", serverFixture)
+	assertJSONNumber(t, out, "file_size", 4194613)
+	assertJSONNumber(t, out, "header_offset", 0)
+	assertJSONNumber(t, out, "leading_padding_bytes", 0)
+	assertJSONString(t, out, "format", "serversidemap")
+	assertJSONString(t, out, "map_encoding", "bool_bytes")
+	assertJSONNumber(t, out, "version", 3)
+	assertJSONNumber(t, out, "map_size", mapSize)
+	assertJSONNumber(t, out, "cells", mapCells)
+	assertJSONNull(t, out, "packed_map_bytes")
+	assertJSONNumber(t, out, "fixed_map_bytes", mapCells)
+	assertJSONNumber(t, out, "estimated_payload_bytes", 301)
+	assertJSONNumber(t, out, "explored_count", 145930)
+	assertJSONNumber(t, out, "unexplored_count", mapCells-145930)
+	assertJSONFloat(t, out, "explored_percent", float64(145930)*100/mapCells)
+	assertJSONNumber(t, out, "pin_count", 11)
+	assertJSONNumber(t, out, "bytes_consumed", 4194613)
+	assertJSONNumber(t, out, "trailing_bytes", 0)
+}
+
+func assertJSONArray(t *testing.T, out map[string]any, key string, wantLen int) []any {
+	t.Helper()
+	got, ok := out[key].([]any)
+	if !ok {
+		t.Fatalf("%s = %#v, want array", key, out[key])
+	}
+	if len(got) != wantLen {
+		t.Fatalf("%s length = %d, want %d", key, len(got), wantLen)
+	}
+	return got
+}
+
+func findJSONObject(t *testing.T, entries []any, key, want string) map[string]any {
+	t.Helper()
+	for _, entry := range entries {
+		obj, ok := entry.(map[string]any)
+		if !ok {
+			t.Fatalf("entry = %#v, want object", entry)
+		}
+		if got, ok := obj[key].(string); ok && got == want {
+			return obj
+		}
+	}
+	t.Fatalf("array missing object with %s = %q", key, want)
+	return nil
+}
+
+func assertJSONVector(t *testing.T, out map[string]any, key string, wantX, wantY, wantZ float64) {
+	t.Helper()
+	pos, ok := out[key].(map[string]any)
+	if !ok {
+		t.Fatalf("%s = %#v, want object", key, out[key])
+	}
+	assertJSONFloatClose(t, pos, "x", wantX)
+	assertJSONFloatClose(t, pos, "y", wantY)
+	assertJSONFloatClose(t, pos, "z", wantZ)
+}
+
+func assertJSONSummary(t *testing.T, out map[string]any, displayName, source string, pinCount, impliedObjectCount, batchPins, checked, unchecked int) {
+	t.Helper()
+	assertJSONString(t, out, "display_name", displayName)
+	assertJSONString(t, out, "source", source)
+	assertJSONNumber(t, out, "pin_count", pinCount)
+	assertJSONNumber(t, out, "implied_object_count", impliedObjectCount)
+	assertJSONNumber(t, out, "batch_pins", batchPins)
+	assertJSONNumber(t, out, "checked", checked)
+	assertJSONNumber(t, out, "unchecked", unchecked)
+}
+
+func assertJSONString(t *testing.T, out map[string]any, key, want string) {
+	t.Helper()
+	got, ok := out[key].(string)
+	if !ok || got != want {
+		t.Fatalf("%s = %#v, want %q", key, out[key], want)
+	}
+}
+
+func assertJSONNumber(t *testing.T, out map[string]any, key string, want int) {
+	t.Helper()
+	got, ok := out[key].(float64)
+	if !ok || got != float64(want) {
+		t.Fatalf("%s = %#v, want %d", key, out[key], want)
+	}
+}
+
+func assertJSONFloat(t *testing.T, out map[string]any, key string, want float64) {
+	t.Helper()
+	got, ok := out[key].(float64)
+	if !ok || got != want {
+		t.Fatalf("%s = %#v, want %g", key, out[key], want)
+	}
+}
+
+func assertJSONFloatClose(t *testing.T, out map[string]any, key string, want float64) {
+	t.Helper()
+	got, ok := out[key].(float64)
+	if !ok || math.Abs(got-want) > 0.00001 {
+		t.Fatalf("%s = %#v, want %g", key, out[key], want)
+	}
+}
+
+func assertJSONBool(t *testing.T, out map[string]any, key string, want bool) {
+	t.Helper()
+	got, ok := out[key].(bool)
+	if !ok || got != want {
+		t.Fatalf("%s = %#v, want %t", key, out[key], want)
+	}
+}
+
+func assertJSONNull(t *testing.T, out map[string]any, key string) {
+	t.Helper()
+	got, ok := out[key]
+	if !ok || got != nil {
+		t.Fatalf("%s = %#v, want null", key, got)
+	}
+}
+
+func assertJSONMissing(t *testing.T, out map[string]any, key string) {
+	t.Helper()
+	if _, ok := out[key]; ok {
+		t.Fatalf("%s present, want omitted", key)
+	}
 }

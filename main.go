@@ -393,7 +393,10 @@ func readExploredFile(path string) (*DecodedFile, error) {
 		if err != nil {
 			return nil, err
 		}
-		decoded := decodePinName(name)
+		var decoded DecodedName
+		if formatForVersion(version) == "one_map_to_rule_them_all" {
+			decoded = decodePinName(name)
+		}
 		pos, err := r.readVector3()
 		if err != nil {
 			return nil, err
@@ -483,21 +486,29 @@ func summaryKey(pin Pin) (key, displayName, source string) {
 }
 
 func main() {
+	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
+}
+
+func run(args []string, stdout, stderr io.Writer) int {
 	var jsonPath string
 	var showPins, showSummary bool
-	flag.StringVar(&jsonPath, "json", "", "write decoded metadata/pins JSON")
-	flag.BoolVar(&showPins, "pins", false, "print full pin list to stdout")
-	flag.BoolVar(&showSummary, "summary", false, "include pin summary grouped by source and display name")
-	flag.Parse()
-	if flag.NArg() != 1 {
-		fmt.Fprintf(os.Stderr, "usage: %s [--json path] [--pins] [--summary] file\n", os.Args[0])
-		os.Exit(2)
+	flags := flag.NewFlagSet("onemap", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	flags.StringVar(&jsonPath, "json", "", "write decoded metadata/pins JSON")
+	flags.BoolVar(&showPins, "pins", false, "print full pin list to stdout")
+	flags.BoolVar(&showSummary, "summary", false, "include pin summary grouped by source and display name")
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if flags.NArg() != 1 {
+		fmt.Fprintln(stderr, "usage: onemap [--json path] [--pins] [--summary] file")
+		return 2
 	}
 
-	decoded, err := readExploredFile(flag.Arg(0))
+	decoded, err := readExploredFile(flags.Arg(0))
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
+		fmt.Fprintln(stderr, err)
+		return 1
 	}
 	if showSummary {
 		decoded.PinSummary = summarizePins(decoded.fullPins)
@@ -513,22 +524,23 @@ func main() {
 		clone.Pins = decoded.fullPins
 		data, err := marshalStableJSON(&clone)
 		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
+			fmt.Fprintln(stderr, err)
+			return 1
 		}
 		if err := os.WriteFile(jsonPath, data, 0644); err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
+			fmt.Fprintln(stderr, err)
+			return 1
 		}
 	}
 
 	data, err := marshalStableJSON(decoded)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
+		fmt.Fprintln(stderr, err)
+		return 1
 	}
-	os.Stdout.Write(data)
-	os.Stdout.Write([]byte("\n"))
+	stdout.Write(data)
+	stdout.Write([]byte("\n"))
+	return 0
 }
 
 func marshalStableJSON(v any) ([]byte, error) {
